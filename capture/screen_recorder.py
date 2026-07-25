@@ -16,10 +16,29 @@ import shutil
 import signal
 import subprocess
 import time
+from pathlib import Path
 
 from capture.backend import session_type
 
 FRAMERATE = 30
+
+# Mémorise le choix d'écran du portail ScreenCast (restore_token) pour que GNOME
+# n'affiche plus la boîte de dialogue de partage à chaque enregistrement.
+RESTORE_TOKEN_PATH = Path.home() / ".local" / "share" / "screen_capture_tool" / "screencast_restore_token"
+
+
+def _load_restore_token() -> str:
+    try:
+        return RESTORE_TOKEN_PATH.read_text().strip()
+    except OSError:
+        return ""
+
+
+def _save_restore_token(token: str):
+    if not token:
+        return
+    RESTORE_TOKEN_PATH.parent.mkdir(parents=True, exist_ok=True)
+    RESTORE_TOKEN_PATH.write_text(token)
 
 
 class ScreenCastError(RuntimeError):
@@ -97,17 +116,20 @@ def open_screencast_session() -> ScreenCastSession:
     )
     session_handle = create_results["session_handle"]
 
+    select_options = {
+        "handle_token": token + "sel",
+        "types": dbus.UInt32(1),  # 1 = MONITOR
+        "multiple": False,
+        "cursor_mode": dbus.UInt32(2),  # 2 = EMBEDDED (curseur visible dans le flux)
+        "persist_mode": dbus.UInt32(2),  # 2 = mémoriser jusqu'à révocation explicite
+    }
+    saved_token = _load_restore_token()
+    if saved_token:
+        select_options["restore_token"] = saved_token
+
     call_and_wait(
         lambda: f"/org/freedesktop/portal/desktop/request/{unique_name}/{token}sel",
-        lambda: screencast_iface.SelectSources(
-            session_handle,
-            {
-                "handle_token": token + "sel",
-                "types": dbus.UInt32(1),  # 1 = MONITOR
-                "multiple": False,
-                "cursor_mode": dbus.UInt32(2),  # 2 = EMBEDDED (curseur visible dans le flux)
-            },
-        ),
+        lambda: screencast_iface.SelectSources(session_handle, select_options),
     )
 
     start_results = call_and_wait(
@@ -116,6 +138,10 @@ def open_screencast_session() -> ScreenCastSession:
             session_handle, "", {"handle_token": token + "start"}
         ),
     )
+
+    new_token = start_results.get("restore_token")
+    if new_token:
+        _save_restore_token(str(new_token))
 
     streams = start_results.get("streams")
     if not streams:
