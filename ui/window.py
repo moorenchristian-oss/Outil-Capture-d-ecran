@@ -1,7 +1,8 @@
+from datetime import datetime
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, QSize, QTimer
-from PyQt6.QtGui import QAction, QActionGroup, QIcon
+from PyQt6.QtGui import QAction, QActionGroup, QIcon, QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
@@ -12,23 +13,25 @@ from PyQt6.QtWidgets import (
     QScrollArea,
     QToolBar,
     QToolButton,
+    QVBoxLayout,
     QWidget,
 )
 
 from annotation.painter import AnnotationCanvas, AnnotationTool
 from capture.backend import session_type
+from capture.screen_recorder import ScreenCastError, VideoRecorder
 from capture.screenshot import capture_fullscreen, crop_to_logical_rect
 from capture.selector import RegionSelectorOverlay
 from clipboard.manager import copy_image
 from database.history import add_entry
 from ocr.ocr_engine import get_default_engine
+from ui.drawing_options_bar import DrawingOptionsBar
 from ui.icons import icon
 from ui.ocr_selection import OCRSelectionDialog, build_text
+from ui.recording_indicator import RecordingIndicator
 from ui.toggle_switch import ToggleSwitch
 
 MODES = [
-    ("Forme libre", "freeform", "edit-select-all-symbolic", "lasso.png"),
-    ("Capture rectangulaire", "rectangle", "object-select-symbolic", "capture-rect-dashed.png"),
     ("Capture Fenêtre", "window", "focus-windows-symbolic", None),
     ("Capture Plein écran", "fullscreen", "view-fullscreen-symbolic", None),
 ]
@@ -39,6 +42,8 @@ TOOLS = [
     ("Gomme", AnnotationTool.ERASER, "edit-clear-symbolic", None),
     ("Carré / Rectangle", AnnotationTool.RECTANGLE, "shape-rectangle-symbolic", "draw-rectangle.png"),
     ("Rond / Ellipse", AnnotationTool.ELLIPSE, "shape-circle-symbolic", "draw-circle.png"),
+    ("Ligne droite", AnnotationTool.LINE, "insert-line-symbolic", "draw-line.png"),
+    ("Flèche", AnnotationTool.ARROW, "draw-arrow-symbolic", "draw-arrow.png"),
 ]
 
 ICON_PATH = Path(__file__).parent.parent / "data" / "icons" / "outil-capture-decran-256.png"
@@ -51,15 +56,25 @@ class MainWindow(QMainWindow):
         self.setWindowIcon(QIcon(str(ICON_PATH)))
         self.resize(760, 540)
 
-        self._mode = "rectangle"
+        self._mode = "window"
         self._overlay = None
         self._pending_action = "capture"
         self._mute_sound = True
         self.canvas = None
 
+        self._video_overlay = None
+        self._video_output_path = None
+        self._recorder = None
+        self._recording_indicator = None
+        self._recording_timer = QTimer(self)
+        self._recording_timer.timeout.connect(self._update_recording_time)
+
         self._build_menu_bar()
         self._build_toolbar()
         self._build_canvas()
+
+        undo_shortcut = QShortcut(QKeySequence("Ctrl+Z"), self)
+        undo_shortcut.activated.connect(self._on_undo)
 
     def _build_menu_bar(self):
         menu_bar = self.menuBar()
@@ -90,6 +105,8 @@ class MainWindow(QMainWindow):
         self.action_nouveau.triggered.connect(self.on_nouveau)
         toolbar.addAction(self.action_nouveau)
 
+        toolbar.addWidget(self._build_video_button())
+
         toolbar.addWidget(self._build_mode_button())
         toolbar.addSeparator()
 
@@ -111,7 +128,32 @@ class MainWindow(QMainWindow):
         self.action_ocr.triggered.connect(self.on_ocr)
         toolbar.addAction(self.action_ocr)
         toolbar.addSeparator()
+
         toolbar.addWidget(self._build_mute_switch())
+
+    def _build_video_button(self) -> QToolButton:
+        button = QToolButton()
+        button.setText("Vidéo")
+        button.setIcon(icon("camera-video-symbolic"))
+        button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
+        button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+
+        menu = QMenu(button)
+        action_zone = QAction(
+            icon("object-select-symbolic", "capture-rect-dashed.png"),
+            "Enregistrer une zone",
+            menu,
+        )
+        action_zone.triggered.connect(lambda: self.on_video(region=True))
+        action_full = QAction(
+            icon("view-fullscreen-symbolic"), "Enregistrer le plein écran", menu
+        )
+        action_full.triggered.connect(lambda: self.on_video(region=False))
+        menu.addAction(action_zone)
+        menu.addAction(action_full)
+
+        button.setMenu(menu)
+        return button
 
     def _build_mute_switch(self) -> QWidget:
         container = QWidget()
@@ -179,10 +221,15 @@ class MainWindow(QMainWindow):
     def _set_annotation_tool(self, tool: AnnotationTool):
         if self.canvas is not None:
             self.canvas.set_tool(tool)
+            self.drawing_options_bar.set_active_tool(tool)
         else:
             QMessageBox.information(
                 self, "Aucune capture", "Prenez d'abord une capture avec Nouveau."
             )
+
+    def _on_undo(self):
+        if self.canvas is not None:
+            self.canvas.undo()
 
     def _build_canvas(self):
         self.placeholder_label = QLabel(
@@ -194,9 +241,36 @@ class MainWindow(QMainWindow):
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
         self.scroll.setWidget(self.placeholder_label)
-        self.setCentralWidget(self.scroll)
+
+        self.drawing_options_bar = DrawingOptionsBar()
+        self.drawing_options_bar.setVisible(False)
+        self.drawing_options_bar.stroke_color_changed.connect(self._on_stroke_color_changed)
+        self.drawing_options_bar.highlighter_color_changed.connect(self._on_highlighter_color_changed)
+        self.drawing_options_bar.size_changed.connect(self._on_size_changed)
+        self.drawing_options_bar.undo_requested.connect(self._on_undo)
+
+        container = QWidget()
+        container_layout = QVBoxLayout(container)
+        container_layout.setContentsMargins(0, 0, 0, 0)
+        container_layout.setSpacing(0)
+        container_layout.addWidget(self.drawing_options_bar)
+        container_layout.addWidget(self.scroll)
+        self.setCentralWidget(container)
+
+    def _on_stroke_color_changed(self, color):
+        if self.canvas is not None:
+            self.canvas.set_stroke_color(color)
+
+    def _on_highlighter_color_changed(self, color):
+        if self.canvas is not None:
+            self.canvas.set_highlighter_color(color)
+
+    def _on_size_changed(self, preset):
+        if self.canvas is not None:
+            self.canvas.set_size(preset)
 
     def on_nouveau(self):
+        self.drawing_options_bar.setVisible(False)
         self.hide()
         QTimer.singleShot(150, self._start_capture)
 
@@ -249,6 +323,8 @@ class MainWindow(QMainWindow):
         self.action_save.setEnabled(True)
         self.action_copy.setEnabled(True)
         self.action_ocr.setEnabled(True)
+        self.drawing_options_bar.set_active_tool(AnnotationTool.PEN)
+        self.drawing_options_bar.setVisible(True)
 
     def on_enregistrer(self):
         if self.canvas is None:
@@ -296,6 +372,69 @@ class MainWindow(QMainWindow):
 
         add_entry("ocr", "", build_text(words, range(len(words))))
         OCRSelectionDialog(image, words, self).exec()
+
+    def on_video(self, region: bool):
+        self.hide()
+        if region:
+            self._video_overlay = RegionSelectorOverlay()
+            self._video_overlay.region_selected.connect(
+                lambda rect: self._start_recording(rect, self._video_overlay.size())
+            )
+            self._video_overlay.cancelled.connect(self._bring_to_front)
+            self._video_overlay.showFullScreen()
+        else:
+            QTimer.singleShot(150, lambda: self._start_recording(None, None))
+
+    def _start_recording(self, rect, overlay_size):
+        default_dir = Path.home() / "Vidéos"
+        default_dir.mkdir(parents=True, exist_ok=True)
+        filename = f"video_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.mp4"
+        self._video_output_path = str(default_dir / filename)
+
+        self._recorder = VideoRecorder()
+        try:
+            self._recorder.start(self._video_output_path, rect, overlay_size)
+        except ScreenCastError as exc:
+            self._recorder = None
+            self._bring_to_front()
+            QMessageBox.warning(self, "Enregistrement vidéo", str(exc))
+            return
+        except Exception as exc:
+            self._recorder = None
+            self._bring_to_front()
+            QMessageBox.warning(self, "Erreur d'enregistrement", str(exc))
+            return
+
+        self._recording_indicator = RecordingIndicator()
+        self._recording_indicator.stop_requested.connect(self._stop_recording)
+        self._recording_indicator.show()
+        self._recording_timer.start(1000)
+
+    def _update_recording_time(self):
+        if self._recorder is not None and self._recording_indicator is not None:
+            self._recording_indicator.set_elapsed(self._recorder.elapsed_seconds())
+
+    def _stop_recording(self):
+        self._recording_timer.stop()
+        if self._recording_indicator is not None:
+            self._recording_indicator.close()
+            self._recording_indicator = None
+
+        if self._recorder is not None:
+            try:
+                self._recorder.stop()
+            except Exception as exc:
+                self._bring_to_front()
+                QMessageBox.warning(self, "Erreur d'enregistrement", str(exc))
+                self._recorder = None
+                return
+            self._recorder = None
+
+        add_entry("video", self._video_output_path)
+        self._bring_to_front()
+        QMessageBox.information(
+            self, "Vidéo enregistrée", f"Vidéo enregistrée : {self._video_output_path}"
+        )
 
     def on_about(self):
         QMessageBox.information(
