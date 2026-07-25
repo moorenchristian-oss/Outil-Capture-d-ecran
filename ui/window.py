@@ -21,7 +21,7 @@ from annotation.painter import AnnotationCanvas, AnnotationTool
 from capture.backend import session_type
 from capture.screen_recorder import ScreenCastError, VideoRecorder
 from capture.screenshot import capture_fullscreen, crop_to_logical_rect
-from capture.selector import RegionSelectorOverlay
+from capture.selector import FocusAnchor, RegionSelectorOverlay
 from clipboard.manager import copy_image
 from database.history import add_entry
 from ocr.ocr_engine import get_default_engine
@@ -276,7 +276,14 @@ class MainWindow(QMainWindow):
 
     def _start_capture(self):
         if self._mode == "fullscreen":
-            self._grab_and_finish(None)
+            # Pas de sélecteur de zone dans ce mode : une fenêtre invisible dédiée
+            # garde l'application "focalisable" le temps de l'appel au portail (voir
+            # FocusAnchor), sans quoi la fenêtre principale masquée par hide() ferait
+            # échouer la demande de capture sous Wayland natif.
+            self._overlay = FocusAnchor()
+            self._overlay.show()
+            self._overlay.activateWindow()
+            QTimer.singleShot(80, lambda: self._grab_and_finish(None))
             return
 
         self._overlay = RegionSelectorOverlay()
@@ -306,6 +313,10 @@ class MainWindow(QMainWindow):
             self._bring_to_front()
             QMessageBox.warning(self, "Erreur de capture", str(exc))
             return
+        finally:
+            if self._overlay is not None:
+                self._overlay.finish()
+                self._overlay = None
 
         if rect is not None:
             image = crop_to_logical_rect(image, overlay_size, rect)
@@ -383,6 +394,9 @@ class MainWindow(QMainWindow):
             self._video_overlay.cancelled.connect(self._bring_to_front)
             self._video_overlay.showFullScreen()
         else:
+            self._video_overlay = FocusAnchor()
+            self._video_overlay.show()
+            self._video_overlay.activateWindow()
             QTimer.singleShot(150, lambda: self._start_recording(None, None))
 
     def _start_recording(self, rect, overlay_size):
@@ -404,6 +418,13 @@ class MainWindow(QMainWindow):
             self._bring_to_front()
             QMessageBox.warning(self, "Erreur d'enregistrement", str(exc))
             return
+        finally:
+            # Le sélecteur de zone n'a plus besoin de rester mappé (il ne servait qu'à
+            # garder l'application focalisée pour la boîte de dialogue du portail) —
+            # le laisser plus longtemps bloquerait tous les clics sur tout l'écran.
+            if self._video_overlay is not None:
+                self._video_overlay.finish()
+                self._video_overlay = None
 
         self._recording_indicator = RecordingIndicator()
         self._recording_indicator.stop_requested.connect(self._stop_recording)
