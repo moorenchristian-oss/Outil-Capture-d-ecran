@@ -18,6 +18,12 @@ def main():
     QIcon.setThemeName("Yaru")
     QIcon.setFallbackThemeName("Adwaita")
 
+    # Sans ceci, GNOME identifie la fenêtre par son WM_CLASS/app_id qui vaut
+    # "python3" (l'interpréteur), pas l'application — le dock affiche alors
+    # l'icône générique Python au lieu de la nôtre. Doit correspondre au nom du
+    # fichier .desktop créé par install.sh (outil-capture-decran.desktop).
+    app.setDesktopFileName("outil-capture-decran")
+
     app.setWindowIcon(QIcon(str(ICON_PATH)))
     window = MainWindow()
     window.show()
