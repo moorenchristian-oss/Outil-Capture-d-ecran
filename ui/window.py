@@ -2,7 +2,7 @@ from datetime import datetime
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, QSize, QTimer
-from PyQt6.QtGui import QAction, QActionGroup, QIcon, QKeySequence, QShortcut
+from PyQt6.QtGui import QAction, QActionGroup, QIcon, QKeySequence, QPixmap, QShortcut
 from PyQt6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
@@ -20,7 +20,7 @@ from PyQt6.QtWidgets import (
 from annotation.painter import AnnotationCanvas, AnnotationTool
 from capture.backend import session_type
 from capture.screen_recorder import ScreenCastError, VideoRecorder
-from capture.screenshot import capture_fullscreen, crop_to_logical_rect
+from capture.screenshot import capture_fullscreen
 from capture.selector import FocusAnchor, RegionSelectorOverlay
 from clipboard.manager import copy_image
 from database.history import add_entry
@@ -275,23 +275,52 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(150, self._start_capture)
 
     def _start_capture(self):
+        # Une fenêtre invisible dédiée garde l'application "focalisable" le temps de
+        # l'appel au portail (voir FocusAnchor) : sous Wayland natif, le portail refuse
+        # d'afficher sa boîte de dialogue de permission si la fenêtre principale masquée
+        # par hide() laisse l'application sans aucune fenêtre focalisée.
+        self._overlay = FocusAnchor()
+        self._overlay.show()
+        self._overlay.activateWindow()
+        QTimer.singleShot(80, self._grab_background)
+
+    def _grab_background(self):
+        try:
+            image = capture_fullscreen(mute_sound=self._mute_sound)
+        except Exception as exc:
+            if self._overlay is not None:
+                self._overlay.finish()
+                self._overlay = None
+            self._bring_to_front()
+            QMessageBox.warning(self, "Erreur de capture", str(exc))
+            return
+        if self._overlay is not None:
+            self._overlay.finish()
+            self._overlay = None
+
         if self._mode == "fullscreen":
-            # Pas de sélecteur de zone dans ce mode : une fenêtre invisible dédiée
-            # garde l'application "focalisable" le temps de l'appel au portail (voir
-            # FocusAnchor), sans quoi la fenêtre principale masquée par hide() ferait
-            # échouer la demande de capture sous Wayland natif.
-            self._overlay = FocusAnchor()
-            self._overlay.show()
-            self._overlay.activateWindow()
-            QTimer.singleShot(80, lambda: self._grab_and_finish(None))
+            self._deliver_capture(image)
             return
 
-        self._overlay = RegionSelectorOverlay()
-        self._overlay.region_selected.connect(
-            lambda rect: QTimer.singleShot(120, lambda: self._grab_and_finish(rect))
-        )
+        # Le sélecteur recadre directement cette image déjà capturée : aucun second
+        # appel au portail n'est nécessaire pour la capture de zone.
+        self._overlay = RegionSelectorOverlay(QPixmap.fromImage(image))
+        self._overlay.region_selected.connect(self._on_region_selected)
         self._overlay.cancelled.connect(self._cancel_capture)
         self._overlay.showFullScreen()
+
+    def _on_region_selected(self, rect):
+        pixmap = self._overlay.result_pixmap(rect)
+        self._overlay.finish()
+        self._overlay = None
+        self._deliver_capture(pixmap.toImage())
+
+    def _deliver_capture(self, image):
+        action, self._pending_action = self._pending_action, "capture"
+        if action == "ocr":
+            self._run_ocr(image)
+        else:
+            self._finish_capture(image)
 
     def _bring_to_front(self):
         self.show()
@@ -303,29 +332,9 @@ class MainWindow(QMainWindow):
 
     def _cancel_capture(self):
         self._pending_action = "capture"
+        if self._overlay is not None:
+            self._overlay = None
         self._bring_to_front()
-
-    def _grab_and_finish(self, rect):
-        overlay_size = self._overlay.size() if self._overlay is not None else None
-        try:
-            image = capture_fullscreen(mute_sound=self._mute_sound)
-        except Exception as exc:
-            self._bring_to_front()
-            QMessageBox.warning(self, "Erreur de capture", str(exc))
-            return
-        finally:
-            if self._overlay is not None:
-                self._overlay.finish()
-                self._overlay = None
-
-        if rect is not None:
-            image = crop_to_logical_rect(image, overlay_size, rect)
-
-        action, self._pending_action = self._pending_action, "capture"
-        if action == "ocr":
-            self._run_ocr(image)
-        else:
-            self._finish_capture(image)
 
     def _finish_capture(self, image):
         self._bring_to_front()
@@ -386,18 +395,34 @@ class MainWindow(QMainWindow):
 
     def on_video(self, region: bool):
         self.hide()
+        self._video_overlay = FocusAnchor()
+        self._video_overlay.show()
+        self._video_overlay.activateWindow()
         if region:
-            self._video_overlay = RegionSelectorOverlay()
-            self._video_overlay.region_selected.connect(
-                lambda rect: self._start_recording(rect, self._video_overlay.size())
-            )
-            self._video_overlay.cancelled.connect(self._bring_to_front)
-            self._video_overlay.showFullScreen()
+            QTimer.singleShot(80, self._grab_video_background)
         else:
-            self._video_overlay = FocusAnchor()
-            self._video_overlay.show()
-            self._video_overlay.activateWindow()
             QTimer.singleShot(150, lambda: self._start_recording(None, None))
+
+    def _grab_video_background(self):
+        try:
+            image = capture_fullscreen(mute_sound=False)
+        except Exception as exc:
+            if self._video_overlay is not None:
+                self._video_overlay.finish()
+                self._video_overlay = None
+            self._bring_to_front()
+            QMessageBox.warning(self, "Erreur de capture", str(exc))
+            return
+        if self._video_overlay is not None:
+            self._video_overlay.finish()
+            self._video_overlay = None
+
+        self._video_overlay = RegionSelectorOverlay(QPixmap.fromImage(image))
+        self._video_overlay.region_selected.connect(
+            lambda rect: self._start_recording(rect, self._video_overlay.size())
+        )
+        self._video_overlay.cancelled.connect(self._bring_to_front)
+        self._video_overlay.showFullScreen()
 
     def _start_recording(self, rect, overlay_size):
         default_dir = Path.home() / "Vidéos"
