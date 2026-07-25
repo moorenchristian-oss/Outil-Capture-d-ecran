@@ -38,8 +38,8 @@
 ## Installation (Ubuntu)
 
 ```bash
-git clone <url-du-dépôt>
-cd "Outil Capture d'écran"
+git clone https://github.com/moorenchristian-oss/Outil-Capture-d-ecran.git
+cd Outil-Capture-d-ecran
 ./install.sh
 ```
 
