@@ -45,7 +45,7 @@ cd Outil-Capture-d-ecran
 ./install.sh
 ```
 
-Le script installe les paquets système manquants via `apt` (avec demande de mot de passe si nécessaire), ajoute "Outil Capture d'écran" au menu des applications Ubuntu avec son icône, et crée un lanceur en ligne de commande (`~/.local/bin/outil-capture-decran`). Il est sûr à relancer plusieurs fois.
+Installe les dépendances manquantes et ajoute l'application au menu Ubuntu. Peut être relancé sans risque.
 
 Détails des dépendances et du lancement en mode développement : voir [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 
