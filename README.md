@@ -37,6 +37,8 @@
 
 ## Installation (Ubuntu)
 
+Compatible Ubuntu **22.04**, **24.04** et **26.04** LTS.
+
 ```bash
 git clone https://github.com/moorenchristian-oss/Outil-Capture-d-ecran.git
 cd Outil-Capture-d-ecran

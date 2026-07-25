@@ -1,5 +1,9 @@
 # Installation et développement — Outil Capture d'écran
 
+## Versions d'Ubuntu supportées
+
+Testé/adapté pour **22.04 LTS**, **24.04 LTS** et **26.04 LTS**, sur GNOME (bureau par défaut d'Ubuntu). D'autres versions ou d'autres environnements de bureau peuvent fonctionner mais n'ont pas été vérifiés.
+
 ## Installation (utilisateur)
 
 Depuis le dossier du projet :
@@ -14,13 +18,14 @@ Ce script installe les paquets système manquants (via `apt`, avec une demande d
 
 Installées automatiquement par `install.sh` :
 
-- `python3-pyqt6` — interface graphique
-- `python3-dbus`, `python3-gi`, `gir1.2-glib-2.0` — appels au portail Wayland (capture d'écran)
-- `python3-xlib` — capture d'écran en session X11 (repli, la machine cible est Wayland par défaut)
+- `python3-pyqt6` — interface graphique. **Absent des dépôts sur Ubuntu 22.04** (disponible à partir de la 24.04) : sur 22.04, `install.sh` détecte l'absence du paquet apt et installe PyQt6 via `pip install --user` à la place (avec repli automatique sur `--break-system-packages` si nécessaire).
+- `python3-dbus`, `python3-gi`, `gir1.2-glib-2.0` — appels aux portails Wayland (capture d'écran, enregistrement vidéo)
+- `python3-xlib` — capture d'écran en session X11 (repli, la cible principale est Wayland)
 - `tesseract-ocr`, `tesseract-ocr-fra`, `tesseract-ocr-eng` — reconnaissance de texte (OCR)
-- `wireplumber` — coupe le son du déclencheur pendant la capture (`wpctl`)
+- `wireplumber` — coupe le son du déclencheur pendant la capture (`wpctl`) ; si absent ou inactif (ex. système encore sous PulseAudio), la coupure du son est simplement ignorée sans bloquer la capture
+- `gstreamer1.0-tools`, `gstreamer1.0-pipewire`, `gstreamer1.0-plugins-good` — lecture du flux PipeWire pour l'enregistrement vidéo sous Wayland (l'encodage MP4 lui-même utilise `ffmpeg`, déjà présent sur Ubuntu)
 
-Aucun environnement virtuel Python n'est utilisé : l'application tourne avec le Python système et ces paquets apt (l'environnement est "externally managed", `pip`/`venv` ne sont pas nécessaires).
+Aucun environnement virtuel Python n'est utilisé : l'application tourne avec le Python système et ces paquets apt (l'environnement est "externally managed", `pip`/`venv` ne sont pas nécessaires — sauf le repli PyQt6 ci-dessus sur 22.04).
 
 ## Lancer l'application (développement)
 

@@ -9,10 +9,16 @@ UNMUTE_DELAY_SECONDS = 0.8
 
 
 def _set_mute(muted: bool):
-    subprocess.run(
-        ["wpctl", "set-mute", "@DEFAULT_AUDIO_SINK@", "1" if muted else "0"],
-        capture_output=True,
-    )
+    # wpctl (WirePlumber) n'est pas garanti présent/actif sur toutes les versions
+    # d'Ubuntu (ex. PulseAudio encore par défaut) — la coupure du son est une
+    # amélioration de confort, jamais une condition pour que la capture fonctionne.
+    try:
+        subprocess.run(
+            ["wpctl", "set-mute", "@DEFAULT_AUDIO_SINK@", "1" if muted else "0"],
+            capture_output=True,
+        )
+    except OSError:
+        pass
 
 
 @contextmanager
