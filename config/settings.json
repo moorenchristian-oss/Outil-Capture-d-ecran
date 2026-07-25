@@ -1,0 +1,12 @@
+{
+  "output_dir_images": "~/Images/ScreenCaptureTool",
+  "output_dir_videos": "~/Videos/ScreenCaptureTool",
+  "ocr_engine": "tesseract",
+  "ocr_languages": "fra+eng",
+  "video_codec": "libx264",
+  "shortcuts": {
+    "capture": "Ctrl+Shift+S",
+    "ocr": "Ctrl+Shift+O",
+    "record": "Ctrl+Shift+R"
+  }
+}
