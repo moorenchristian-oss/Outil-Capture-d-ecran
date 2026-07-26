@@ -375,7 +375,9 @@ class MainWindow(QMainWindow):
     def _on_crop_confirmed(self):
         if self.canvas is not None:
             self.canvas.confirm_crop()
+            self._fit_window_to_capture(self.canvas.result_image())
         self._end_crop_mode()
+        self._bring_to_front()
 
     def _on_crop_cancelled(self):
         if self.canvas is not None:
