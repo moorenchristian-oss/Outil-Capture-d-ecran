@@ -49,6 +49,7 @@ class AnnotationCanvas(QWidget):
         self._size = "moyen"
         self._undo_stack: list[QPixmap] = []
         self._crop_rect = QRect()
+        self._crop_dimmed_pixmap = None
 
         self.set_image(image)
 
@@ -60,10 +61,25 @@ class AnnotationCanvas(QWidget):
         self.update()
 
     def set_tool(self, tool: AnnotationTool):
-        if self.tool == AnnotationTool.CROP and tool != AnnotationTool.CROP:
+        if tool == AnnotationTool.CROP and self.tool != AnnotationTool.CROP:
+            # Pré-calculé une seule fois à l'entrée du mode Rogner : ré-assombrir toute
+            # l'image à chaque déplacement de souris (fillRect semi-transparent sur un
+            # canevas pouvant faire plusieurs millions de pixels) rendait le glisser très
+            # lent, voire l'application semblait figée sur une grande capture.
+            self._crop_dimmed_pixmap = self._make_dimmed_pixmap()
+        elif self.tool == AnnotationTool.CROP and tool != AnnotationTool.CROP:
             self._crop_rect = QRect()
+            self._crop_dimmed_pixmap = None
         self.tool = tool
         self.update()
+
+    def _make_dimmed_pixmap(self) -> QPixmap:
+        dimmed = QPixmap(self._pixmap.size())
+        painter = QPainter(dimmed)
+        painter.drawPixmap(0, 0, self._pixmap)
+        painter.fillRect(dimmed.rect(), QColor(0, 0, 0, 120))
+        painter.end()
+        return dimmed
 
     def set_stroke_color(self, color: QColor):
         self._stroke_color = QColor(color)
@@ -243,19 +259,21 @@ class AnnotationCanvas(QWidget):
 
     def paintEvent(self, event):
         painter = QPainter(self)
-        painter.drawPixmap(0, 0, self._pixmap)
         if self.tool == AnnotationTool.CROP:
             rect = (
                 QRect(self._start_point, self._current_point).normalized()
                 if self._drawing
                 else self._crop_rect
             )
-            if not rect.isNull():
-                painter.fillRect(self.rect(), QColor(0, 0, 0, 120))
+            if not rect.isNull() and self._crop_dimmed_pixmap is not None:
+                painter.drawPixmap(0, 0, self._crop_dimmed_pixmap)
                 painter.drawPixmap(rect, self._pixmap, rect)
                 painter.setPen(QPen(QColor(255, 255, 255), 2))
                 painter.drawRect(rect)
+            else:
+                painter.drawPixmap(0, 0, self._pixmap)
             return
+        painter.drawPixmap(0, 0, self._pixmap)
         if self._drawing and self.tool in DRAG_RECT_TOOLS:
             painter.setPen(QPen(self._stroke_color, 2, Qt.PenStyle.DashLine))
             if self.tool == AnnotationTool.ELLIPSE:
