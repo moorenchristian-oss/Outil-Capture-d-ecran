@@ -15,9 +15,13 @@ class RecordingIndicator(QWidget):
             | Qt.WindowType.WindowStaysOnTopHint
             | Qt.WindowType.Tool
         )
+        # Couleurs issues de la palette Qt (héritée du thème système clair/sombre)
+        # plutôt que des couleurs fixes, pour rester lisible dans les deux cas.
+        self.setAutoFillBackground(True)
         self.setStyleSheet(
-            "QWidget#recordingIndicator { background-color: #262626; border-radius: 8px; }"
-            "QLabel { color: white; font-weight: bold; }"
+            "QWidget#recordingIndicator { background-color: palette(window); "
+            "border: 1px solid palette(mid); border-radius: 8px; }"
+            "QLabel { color: palette(window-text); font-weight: bold; }"
         )
         self.setObjectName("recordingIndicator")
 

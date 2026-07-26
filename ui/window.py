@@ -2,10 +2,17 @@ from datetime import datetime
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, QSize, QTimer
-from PyQt6.QtGui import QAction, QActionGroup, QIcon, QKeySequence, QPixmap, QShortcut
+from PyQt6.QtGui import (
+    QAction,
+    QActionGroup,
+    QGuiApplication,
+    QIcon,
+    QKeySequence,
+    QPixmap,
+    QShortcut,
+)
 from PyQt6.QtWidgets import (
     QFileDialog,
-    QHBoxLayout,
     QLabel,
     QMainWindow,
     QMenu,
@@ -25,11 +32,11 @@ from capture.selector import FocusAnchor, RegionSelectorOverlay
 from clipboard.manager import copy_image
 from database.history import add_entry
 from ocr.ocr_engine import get_default_engine
+from ui.capture_flash import CaptureFlash
 from ui.drawing_options_bar import DrawingOptionsBar
 from ui.icons import icon
 from ui.ocr_selection import OCRSelectionDialog, build_text
 from ui.recording_indicator import RecordingIndicator
-from ui.toggle_switch import ToggleSwitch
 
 MODES = [
     ("Capture Fenêtre", "window", "focus-windows-symbolic", None),
@@ -44,6 +51,7 @@ TOOLS = [
     ("Rond / Ellipse", AnnotationTool.ELLIPSE, "shape-circle-symbolic", "draw-circle.png"),
     ("Ligne droite", AnnotationTool.LINE, "insert-line-symbolic", "draw-line.png"),
     ("Flèche", AnnotationTool.ARROW, "draw-arrow-symbolic", "draw-arrow.png"),
+    ("Floutage", AnnotationTool.BLUR, "blur-pixelate-symbolic", "blur-pixelate.png"),
 ]
 
 ICON_PATH = Path(__file__).parent.parent / "data" / "icons" / "outil-capture-decran-256.png"
@@ -61,6 +69,7 @@ class MainWindow(QMainWindow):
         self._pending_action = "capture"
         self._mute_sound = True
         self.canvas = None
+        self._tool_before_crop = AnnotationTool.NONE
 
         self._video_overlay = None
         self._video_output_path = None
@@ -83,6 +92,13 @@ class MainWindow(QMainWindow):
         file_menu.addAction("Nouveau", self.on_nouveau)
         file_menu.addAction("Enregistrer sous…", self.on_enregistrer)
         file_menu.addSeparator()
+        self.action_mute = QAction(
+            self._mute_icon(), "Couper le son du déclencheur", self, checkable=True
+        )
+        self.action_mute.setChecked(self._mute_sound)
+        self.action_mute.toggled.connect(self._on_mute_toggled)
+        file_menu.addAction(self.action_mute)
+        file_menu.addSeparator()
         file_menu.addAction("Quitter", self.close)
 
         edit_menu = menu_bar.addMenu("&Édition")
@@ -104,6 +120,13 @@ class MainWindow(QMainWindow):
         self.action_nouveau = QAction(icon("camera-photo-symbolic"), "Nouveau", self)
         self.action_nouveau.triggered.connect(self.on_nouveau)
         toolbar.addAction(self.action_nouveau)
+        nouveau_button = toolbar.widgetForAction(self.action_nouveau)
+        if nouveau_button is not None:
+            nouveau_button.setStyleSheet(
+                "QToolButton { background-color: #2b7fff; border-radius: 6px; }"
+                "QToolButton:hover { background-color: #4a90ff; }"
+                "QToolButton:pressed { background-color: #1f66d0; }"
+            )
 
         toolbar.addWidget(self._build_video_button())
 
@@ -119,6 +142,11 @@ class MainWindow(QMainWindow):
         self.action_copy.triggered.connect(self.on_copier)
         self.action_copy.setEnabled(False)
         toolbar.addAction(self.action_copy)
+
+        self.action_crop = QAction(icon("crop-symbolic"), "Rogner", self)
+        self.action_crop.triggered.connect(self.on_crop)
+        self.action_crop.setEnabled(False)
+        toolbar.addAction(self.action_crop)
         toolbar.addSeparator()
 
         toolbar.addWidget(self._build_tool_button())
@@ -127,9 +155,6 @@ class MainWindow(QMainWindow):
         self.action_ocr = QAction(icon("insert-text-symbolic"), "OCR Texte", self)
         self.action_ocr.triggered.connect(self.on_ocr)
         toolbar.addAction(self.action_ocr)
-        toolbar.addSeparator()
-
-        toolbar.addWidget(self._build_mute_switch())
 
     def _build_video_button(self) -> QToolButton:
         button = QToolButton()
@@ -155,29 +180,12 @@ class MainWindow(QMainWindow):
         button.setMenu(menu)
         return button
 
-    def _build_mute_switch(self) -> QWidget:
-        container = QWidget()
-        layout = QHBoxLayout(container)
-        layout.setContentsMargins(8, 0, 8, 0)
-        layout.setSpacing(6)
-
-        self.mute_icon_label = QLabel()
-        self.mute_icon_label.setPixmap(self._mute_icon().pixmap(18, 18))
-        label = QLabel("Couper le son")
-        self.mute_switch = ToggleSwitch(checked=self._mute_sound)
-        self.mute_switch.toggled.connect(self._on_mute_toggled)
-
-        layout.addWidget(self.mute_icon_label)
-        layout.addWidget(label)
-        layout.addWidget(self.mute_switch)
-        return container
-
     def _mute_icon(self):
         return icon("audio-volume-muted-symbolic" if self._mute_sound else "audio-volume-high-symbolic")
 
     def _on_mute_toggled(self, checked: bool):
         self._mute_sound = checked
-        self.mute_icon_label.setPixmap(self._mute_icon().pixmap(18, 18))
+        self.action_mute.setIcon(self._mute_icon())
 
     def _build_mode_button(self) -> QToolButton:
         button = QToolButton()
@@ -248,6 +256,8 @@ class MainWindow(QMainWindow):
         self.drawing_options_bar.highlighter_color_changed.connect(self._on_highlighter_color_changed)
         self.drawing_options_bar.size_changed.connect(self._on_size_changed)
         self.drawing_options_bar.undo_requested.connect(self._on_undo)
+        self.drawing_options_bar.crop_confirmed.connect(self._on_crop_confirmed)
+        self.drawing_options_bar.crop_cancelled.connect(self._on_crop_cancelled)
 
         container = QWidget()
         container_layout = QVBoxLayout(container)
@@ -298,6 +308,8 @@ class MainWindow(QMainWindow):
             self._overlay.finish()
             self._overlay = None
 
+        self._flash = CaptureFlash()
+
         if self._mode == "fullscreen":
             self._deliver_capture(image)
             return
@@ -343,8 +355,44 @@ class MainWindow(QMainWindow):
         self.action_save.setEnabled(True)
         self.action_copy.setEnabled(True)
         self.action_ocr.setEnabled(True)
+        self.action_crop.setEnabled(True)
         self.drawing_options_bar.set_active_tool(AnnotationTool.PEN)
         self.drawing_options_bar.setVisible(True)
+        self._fit_window_to_capture(image)
+
+    def on_crop(self):
+        if self.canvas is None:
+            return
+        self._tool_before_crop = self.canvas.tool
+        self.canvas.set_tool(AnnotationTool.CROP)
+        self.drawing_options_bar.enter_crop_mode()
+
+    def _end_crop_mode(self):
+        if self.canvas is not None:
+            self.canvas.set_tool(self._tool_before_crop)
+        self.drawing_options_bar.exit_crop_mode()
+
+    def _on_crop_confirmed(self):
+        if self.canvas is not None:
+            self.canvas.confirm_crop()
+        self._end_crop_mode()
+
+    def _on_crop_cancelled(self):
+        if self.canvas is not None:
+            self.canvas.cancel_crop()
+        self._end_crop_mode()
+
+    def _fit_window_to_capture(self, image):
+        # Fenêtre par défaut (760×540) trop petite pour la plupart des captures réelles :
+        # on l'ajuste à la taille de l'image (plafonnée à 90 % de l'écran) pour éviter un
+        # défilement immédiat sur une capture de taille normale.
+        screen = QGuiApplication.primaryScreen().availableGeometry()
+        max_width = int(screen.width() * 0.9)
+        max_height = int(screen.height() * 0.9)
+        chrome_height = 220  # menu + toolbar + barre d'options de dessin
+        target_width = min(image.width() + 40, max_width)
+        target_height = min(image.height() + chrome_height, max_height)
+        self.resize(target_width, target_height)
 
     def on_enregistrer(self):
         if self.canvas is None:

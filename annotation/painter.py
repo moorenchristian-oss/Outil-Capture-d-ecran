@@ -8,11 +8,11 @@ from PyQt6.QtWidgets import QWidget
 DEFAULT_STROKE_COLOR = QColor(220, 30, 30)
 DEFAULT_HIGHLIGHTER_COLOR = QColor(255, 235, 0, 90)
 
-# (épaisseur trait, épaisseur surligneur, rayon gomme) par taille choisie.
+# (épaisseur trait, épaisseur surligneur, rayon gomme, taille de bloc floutage) par taille choisie.
 SIZE_PRESETS = {
-    "fin": (2, 10, 8),
-    "moyen": (4, 18, 14),
-    "epais": (8, 26, 22),
+    "fin": (2, 10, 8, 10),
+    "moyen": (4, 18, 14, 16),
+    "epais": (8, 26, 22, 24),
 }
 
 UNDO_STACK_LIMIT = 20
@@ -27,9 +27,12 @@ class AnnotationTool(Enum):
     ELLIPSE = auto()
     LINE = auto()
     ARROW = auto()
+    BLUR = auto()
+    CROP = auto()
 
 
 SHAPE_TOOLS = (AnnotationTool.RECTANGLE, AnnotationTool.ELLIPSE, AnnotationTool.LINE, AnnotationTool.ARROW)
+DRAG_RECT_TOOLS = SHAPE_TOOLS + (AnnotationTool.BLUR,)
 
 
 class AnnotationCanvas(QWidget):
@@ -45,6 +48,7 @@ class AnnotationCanvas(QWidget):
         self._highlighter_color = QColor(DEFAULT_HIGHLIGHTER_COLOR)
         self._size = "moyen"
         self._undo_stack: list[QPixmap] = []
+        self._crop_rect = QRect()
 
         self.set_image(image)
 
@@ -56,7 +60,10 @@ class AnnotationCanvas(QWidget):
         self.update()
 
     def set_tool(self, tool: AnnotationTool):
+        if self.tool == AnnotationTool.CROP and tool != AnnotationTool.CROP:
+            self._crop_rect = QRect()
         self.tool = tool
+        self.update()
 
     def set_stroke_color(self, color: QColor):
         self._stroke_color = QColor(color)
@@ -76,6 +83,9 @@ class AnnotationCanvas(QWidget):
 
     def _eraser_radius(self) -> int:
         return SIZE_PRESETS[self._size][2]
+
+    def _blur_block_size(self) -> int:
+        return SIZE_PRESETS[self._size][3]
 
     def result_image(self) -> QImage:
         return self._pixmap.toImage()
@@ -113,7 +123,7 @@ class AnnotationCanvas(QWidget):
             self._last_point = event.pos()
         elif self.tool == AnnotationTool.ERASER:
             self._erase_at(event.pos())
-        elif self.tool in SHAPE_TOOLS:
+        elif self.tool in DRAG_RECT_TOOLS or self.tool == AnnotationTool.CROP:
             self._current_point = event.pos()
             self.update()
 
@@ -121,9 +131,36 @@ class AnnotationCanvas(QWidget):
         if not self._drawing:
             return
         self._drawing = False
-        if self.tool in SHAPE_TOOLS:
+        if self.tool == AnnotationTool.CROP:
+            self._crop_rect = QRect(self._start_point, event.pos()).normalized()
+        elif self.tool == AnnotationTool.BLUR:
+            rect = QRect(self._start_point, event.pos()).normalized()
+            self._pixelate_rect(rect)
+        elif self.tool in SHAPE_TOOLS:
             rect = QRect(self._start_point, event.pos()).normalized()
             self._commit_shape(rect, event.pos())
+        self.update()
+
+    def has_pending_crop(self) -> bool:
+        return not self._crop_rect.isNull()
+
+    def confirm_crop(self):
+        if not self._crop_rect.isNull():
+            self.crop(self._crop_rect)
+        self._crop_rect = QRect()
+
+    def cancel_crop(self):
+        self._crop_rect = QRect()
+        self.update()
+
+    def crop(self, rect: QRect):
+        rect = rect.intersected(self._pixmap.rect())
+        if rect.width() < 2 or rect.height() < 2:
+            return
+        self._original = self._original.copy(rect)
+        self._pixmap = self._pixmap.copy(rect)
+        self._undo_stack.clear()
+        self.setFixedSize(self._pixmap.size())
         self.update()
 
     def _draw_line(self, p1: QPoint, p2: QPoint):
@@ -167,6 +204,28 @@ class AnnotationCanvas(QWidget):
         painter.setBrush(self._stroke_color)
         painter.drawPolygon(p2, left, right)
 
+    def _pixelate_rect(self, rect: QRect):
+        rect = rect.intersected(self._pixmap.rect())
+        if rect.width() < 2 or rect.height() < 2:
+            return
+        block = self._blur_block_size()
+        region = self._pixmap.copy(rect)
+        small = region.scaled(
+            max(1, rect.width() // block),
+            max(1, rect.height() // block),
+            Qt.AspectRatioMode.IgnoreAspectRatio,
+            Qt.TransformationMode.FastTransformation,
+        )
+        pixelated = small.scaled(
+            rect.width(),
+            rect.height(),
+            Qt.AspectRatioMode.IgnoreAspectRatio,
+            Qt.TransformationMode.FastTransformation,
+        )
+        painter = QPainter(self._pixmap)
+        painter.drawPixmap(rect.topLeft(), pixelated)
+        painter.end()
+
     def _commit_shape(self, rect: QRect, end_point: QPoint):
         painter = QPainter(self._pixmap)
         pen = QPen(self._stroke_color, self._pen_width())
@@ -185,12 +244,24 @@ class AnnotationCanvas(QWidget):
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.drawPixmap(0, 0, self._pixmap)
-        if self._drawing and self.tool in SHAPE_TOOLS:
+        if self.tool == AnnotationTool.CROP:
+            rect = (
+                QRect(self._start_point, self._current_point).normalized()
+                if self._drawing
+                else self._crop_rect
+            )
+            if not rect.isNull():
+                painter.fillRect(self.rect(), QColor(0, 0, 0, 120))
+                painter.drawPixmap(rect, self._pixmap, rect)
+                painter.setPen(QPen(QColor(255, 255, 255), 2))
+                painter.drawRect(rect)
+            return
+        if self._drawing and self.tool in DRAG_RECT_TOOLS:
             painter.setPen(QPen(self._stroke_color, 2, Qt.PenStyle.DashLine))
             if self.tool == AnnotationTool.ELLIPSE:
                 rect = QRect(self._start_point, self._current_point).normalized()
                 painter.drawEllipse(rect)
-            elif self.tool == AnnotationTool.RECTANGLE:
+            elif self.tool in (AnnotationTool.RECTANGLE, AnnotationTool.BLUR):
                 rect = QRect(self._start_point, self._current_point).normalized()
                 painter.drawRect(rect)
             elif self.tool in (AnnotationTool.LINE, AnnotationTool.ARROW):

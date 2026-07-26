@@ -1,6 +1,8 @@
+import argparse
 import sys
 from pathlib import Path
 
+from PyQt6.QtCore import QTimer
 from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import QApplication
 
@@ -9,7 +11,18 @@ from ui.window import MainWindow
 ICON_PATH = Path(__file__).parent / "data" / "icons" / "outil-capture-decran-256.png"
 
 
+def parse_args():
+    parser = argparse.ArgumentParser(description="Outil Capture d'écran")
+    parser.add_argument(
+        "--capture",
+        action="store_true",
+        help="Lance directement une capture au démarrage (pour un raccourci clavier système).",
+    )
+    return parser.parse_args()
+
+
 def main():
+    args = parse_args()
     app = QApplication(sys.argv)
 
     # Sans ceci, QIcon.fromTheme() renvoie des icônes nulles pour tout —
@@ -27,6 +40,8 @@ def main():
     app.setWindowIcon(QIcon(str(ICON_PATH)))
     window = MainWindow()
     window.show()
+    if args.capture:
+        QTimer.singleShot(0, window.on_nouveau)
     sys.exit(app.exec())
 
 

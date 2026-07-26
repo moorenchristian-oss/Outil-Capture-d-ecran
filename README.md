@@ -30,10 +30,12 @@
 
 - **Capture d'écran** en session X11 ou Wayland (portail `xdg-desktop-portal`), avec sélection de zone à la souris avant la prise de vue, capture d'une fenêtre ou du plein écran.
 - **OCR (reconnaissance de texte)** via Tesseract : le texte détecté peut être sélectionné directement sur l'image avec la souris, puis copié (`Ctrl+C` ou clic droit).
-- **Annotation complète** : Stylet, Surligneur, Gomme, Rectangle, Ellipse, Ligne droite, Flèche — couleur et épaisseur (Fin/Moyen/Épais) réglables depuis une barre d'options, et Annuler (`Ctrl+Z`).
+- **Annotation complète** : Stylet, Surligneur, Gomme, Rectangle, Ellipse, Ligne droite, Flèche, Floutage/pixellisation — couleur et épaisseur (Fin/Moyen/Épais) réglables depuis une barre d'options, et Annuler (`Ctrl+Z`).
+- **Rogner** la capture après coup, sans avoir à la refaire.
 - **Enregistrement vidéo** MP4 d'une zone sélectionnée à la souris ou du plein écran, nommé automatiquement par date et heure.
 - **Copier / Enregistrer** la capture annotée en PNG.
-- **Coupure du son du déclencheur** pendant la capture, activable via un bouton coulissant dans la barre d'outils.
+- **Coupure du son du déclencheur** (menu Fichier).
+- **Raccourci clavier global** (à configurer une fois, voir plus bas) pour lancer une capture depuis n'importe où, sans avoir à ouvrir l'application au préalable.
 
 ## Installation (Ubuntu)
 
@@ -55,6 +57,17 @@ Détails des dépendances et du lancement en mode développement : voir [docs/DE
 2. Annoter la capture depuis la barre d'outils **Dessin** — couleur, épaisseur et Annuler apparaissent dans la barre juste au-dessus de l'image.
 3. Copier, enregistrer, ou lancer l'**OCR Texte** pour sélectionner et copier du texte directement sur la photo.
 4. Cliquer sur **Vidéo** pour enregistrer une zone sélectionnée à la souris ou le plein écran ; le fichier MP4 est enregistré automatiquement dans `~/Vidéos`.
+
+## Raccourci clavier global
+
+Contrairement à Windows, GNOME/Wayland ne permet pas à une application de réagir à un raccourci clavier tant qu'elle n'est pas déjà lancée. La solution : créer un raccourci personnalisé GNOME qui lance l'application directement en mode capture.
+
+1. **Paramètres** → **Clavier** → **Voir et personnaliser les raccourcis** → **Raccourcis personnalisés** → **+**
+2. Nom : `Capture d'écran`
+3. Commande : `outil-capture-decran --capture` (ou le chemin complet si `~/.local/bin` n'est pas dans le PATH, ex. `/home/<utilisateur>/.local/bin/outil-capture-decran --capture`)
+4. Associer la combinaison de touches de son choix (ex. `Ctrl+Maj+S`)
+
+Une fois configuré, ce raccourci fonctionne depuis n'importe où sur le bureau.
 
 ## Structure du projet
 
